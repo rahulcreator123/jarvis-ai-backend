@@ -8,6 +8,10 @@ from pydantic import BaseModel
 from google import genai
 
 
+# ============================================================
+# ENVIRONMENT
+# ============================================================
+
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -15,17 +19,36 @@ PORT = int(os.getenv("PORT", "8000"))
 
 MODEL_NAME = "gemini-3.5-flash"
 
+
+# ============================================================
+# GEMINI CLIENT
+# ============================================================
+
 client = None
 
 if GEMINI_API_KEY:
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(
+        api_key=GEMINI_API_KEY,
+        http_options={
+            "api_version": "v1"
+        }
+    )
 
+
+# ============================================================
+# FASTAPI APP
+# ============================================================
 
 app = FastAPI(
     title="Jarvis AI Cloud Backend",
+    description="Cloud AI backend for the Jarvis Android application",
     version="2.0.0"
 )
 
+
+# ============================================================
+# CORS
+# ============================================================
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,6 +58,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ============================================================
+# REQUEST / RESPONSE MODELS
+# ============================================================
 
 class ChatRequest(BaseModel):
     message: str
@@ -47,8 +74,13 @@ class ChatResponse(BaseModel):
     provider: str
 
 
+# ============================================================
+# ROOT
+# ============================================================
+
 @app.get("/")
 async def root():
+
     return {
         "status": "online",
         "service": "Jarvis AI Cloud Backend",
@@ -57,8 +89,13 @@ async def root():
     }
 
 
+# ============================================================
+# HEALTH CHECK
+# ============================================================
+
 @app.get("/health")
 async def health():
+
     return {
         "status": "healthy",
         "gemini_configured": bool(GEMINI_API_KEY),
@@ -66,47 +103,100 @@ async def health():
     }
 
 
+# ============================================================
+# CHAT
+# ============================================================
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
 
+    # --------------------------------------------------------
+    # Check API key
+    # --------------------------------------------------------
+
     if not GEMINI_API_KEY:
+
         raise HTTPException(
             status_code=500,
-            detail="GEMINI_API_KEY is not configured."
+            detail="GEMINI_API_KEY is not configured on the server."
         )
 
+    # --------------------------------------------------------
+    # Check Gemini client
+    # --------------------------------------------------------
+
+    if client is None:
+
+        raise HTTPException(
+            status_code=500,
+            detail="Gemini client was not initialized."
+        )
+
+    # --------------------------------------------------------
+    # Check message
+    # --------------------------------------------------------
+
     if not request.message.strip():
+
         raise HTTPException(
             status_code=400,
             detail="Message cannot be empty."
         )
 
-    try:
+    # --------------------------------------------------------
+    # Jarvis personality
+    # --------------------------------------------------------
 
-        system_prompt = """
+    system_prompt = """
 You are Jarvis, a personal AI assistant.
 
-Personality:
+Your personality:
 - Intelligent
 - Friendly
 - Calm
 - Helpful
-- Concise
 - Natural
+- Concise
+- Professional
 
-You are the cloud AI for an Android assistant.
+You are the cloud AI backend for an Android assistant.
 
 Answer the user's request directly.
-Do not claim that you performed actions on the phone unless
-the Android application actually performs that action.
+
+You can help with:
+- Questions
+- Coding
+- Learning
+- Planning
+- Explanations
+- General conversation
+- Productivity
+
+Important:
+Do not claim that you performed an action on the Android phone
+unless the Android application actually performed that action.
+
+Do not pretend to have access to phone sensors, camera,
+microphone, files, contacts, messages, or applications unless
+the Android application explicitly provides that information.
 """
 
-        prompt = f"""
+    # --------------------------------------------------------
+    # Build prompt
+    # --------------------------------------------------------
+
+    prompt = f"""
 {system_prompt}
 
-USER:
+USER MESSAGE:
 {request.message}
 """
+
+    # --------------------------------------------------------
+    # Call Gemini
+    # --------------------------------------------------------
+
+    try:
 
         interaction = client.interactions.create(
             model=MODEL_NAME,
@@ -116,6 +206,7 @@ USER:
         answer = interaction.output_text
 
         if not answer:
+
             answer = "Sorry, I couldn't generate a response."
 
         return ChatResponse(
@@ -126,13 +217,20 @@ USER:
 
     except Exception as e:
 
-        print("Gemini error:", repr(e))
+        print("========================================")
+        print("GEMINI REQUEST ERROR")
+        print(repr(e))
+        print("========================================")
 
         raise HTTPException(
             status_code=500,
             detail=f"Gemini request failed: {str(e)}"
         )
 
+
+# ============================================================
+# SERVER
+# ============================================================
 
 if __name__ == "__main__":
 
