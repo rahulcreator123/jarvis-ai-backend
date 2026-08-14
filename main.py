@@ -28,21 +28,18 @@ client = None
 
 if GEMINI_API_KEY:
     client = genai.Client(
-        api_key=GEMINI_API_KEY,
-        http_options={
-            "api_version": "v1"
-        }
+        api_key=GEMINI_API_KEY
     )
 
 
 # ============================================================
-# FASTAPI APP
+# FASTAPI
 # ============================================================
 
 app = FastAPI(
     title="Jarvis AI Cloud Backend",
-    description="Cloud AI backend for the Jarvis Android application",
-    version="2.0.0"
+    description="Cloud AI backend for Jarvis Android",
+    version="3.0.0"
 )
 
 
@@ -60,7 +57,7 @@ app.add_middleware(
 
 
 # ============================================================
-# REQUEST / RESPONSE MODELS
+# MODELS
 # ============================================================
 
 class ChatRequest(BaseModel):
@@ -90,7 +87,7 @@ async def root():
 
 
 # ============================================================
-# HEALTH CHECK
+# HEALTH
 # ============================================================
 
 @app.get("/health")
@@ -110,47 +107,28 @@ async def health():
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
 
-    # --------------------------------------------------------
-    # Check API key
-    # --------------------------------------------------------
-
     if not GEMINI_API_KEY:
-
         raise HTTPException(
             status_code=500,
-            detail="GEMINI_API_KEY is not configured on the server."
+            detail="GEMINI_API_KEY is not configured."
         )
 
-    # --------------------------------------------------------
-    # Check Gemini client
-    # --------------------------------------------------------
-
     if client is None:
-
         raise HTTPException(
             status_code=500,
             detail="Gemini client was not initialized."
         )
 
-    # --------------------------------------------------------
-    # Check message
-    # --------------------------------------------------------
-
     if not request.message.strip():
-
         raise HTTPException(
             status_code=400,
             detail="Message cannot be empty."
         )
 
-    # --------------------------------------------------------
-    # Jarvis personality
-    # --------------------------------------------------------
-
     system_prompt = """
 You are Jarvis, a personal AI assistant.
 
-Your personality:
+Personality:
 - Intelligent
 - Friendly
 - Calm
@@ -172,41 +150,31 @@ You can help with:
 - General conversation
 - Productivity
 
-Important:
-Do not claim that you performed an action on the Android phone
-unless the Android application actually performed that action.
+Do not claim to have performed actions on the Android device
+unless the Android application actually performed those actions.
 
-Do not pretend to have access to phone sensors, camera,
-microphone, files, contacts, messages, or applications unless
-the Android application explicitly provides that information.
+Do not claim access to the phone's camera, microphone, files,
+contacts, messages, sensors, or applications unless the Android
+application explicitly provides that information.
 """
-
-    # --------------------------------------------------------
-    # Build prompt
-    # --------------------------------------------------------
 
     prompt = f"""
 {system_prompt}
 
-USER MESSAGE:
+USER:
 {request.message}
 """
 
-    # --------------------------------------------------------
-    # Call Gemini
-    # --------------------------------------------------------
-
     try:
 
-        interaction = client.interactions.create(
+        response = client.models.generate_content(
             model=MODEL_NAME,
-            input=prompt
+            contents=prompt
         )
 
-        answer = interaction.output_text
+        answer = response.text
 
         if not answer:
-
             answer = "Sorry, I couldn't generate a response."
 
         return ChatResponse(
