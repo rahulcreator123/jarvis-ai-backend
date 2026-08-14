@@ -1,11 +1,11 @@
 import os
 from typing import Optional
 
+import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from google import genai
 
 
 # ============================================================
@@ -14,22 +14,13 @@ from google import genai
 
 load_dotenv()
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 PORT = int(os.getenv("PORT", "8000"))
 
-MODEL_NAME = "gemini-3.5-flash"
+# OpenRouter free model router
+MODEL_NAME = "openrouter/free"
 
-
-# ============================================================
-# GEMINI CLIENT
-# ============================================================
-
-client = None
-
-if GEMINI_API_KEY:
-    client = genai.Client(
-        api_key=GEMINI_API_KEY
-    )
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 
 # ============================================================
@@ -39,7 +30,7 @@ if GEMINI_API_KEY:
 app = FastAPI(
     title="Jarvis AI Cloud Backend",
     description="Cloud AI backend for Jarvis Android",
-    version="3.0.0"
+    version="4.0.0"
 )
 
 
@@ -57,7 +48,7 @@ app.add_middleware(
 
 
 # ============================================================
-# MODELS
+# REQUEST / RESPONSE MODELS
 # ============================================================
 
 class ChatRequest(BaseModel):
@@ -81,7 +72,7 @@ async def root():
     return {
         "status": "online",
         "service": "Jarvis AI Cloud Backend",
-        "provider": "Google Gemini",
+        "provider": "OpenRouter",
         "model": MODEL_NAME
     }
 
@@ -95,7 +86,7 @@ async def health():
 
     return {
         "status": "healthy",
-        "gemini_configured": bool(GEMINI_API_KEY),
+        "openrouter_configured": bool(OPENROUTER_API_KEY),
         "model": MODEL_NAME
     }
 
@@ -107,28 +98,36 @@ async def health():
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
 
-    if not GEMINI_API_KEY:
+    # --------------------------------------------------------
+    # Check API key
+    # --------------------------------------------------------
+
+    if not OPENROUTER_API_KEY:
+
         raise HTTPException(
             status_code=500,
-            detail="GEMINI_API_KEY is not configured."
+            detail="OPENROUTER_API_KEY is not configured on the server."
         )
 
-    if client is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Gemini client was not initialized."
-        )
+    # --------------------------------------------------------
+    # Check message
+    # --------------------------------------------------------
 
     if not request.message.strip():
+
         raise HTTPException(
             status_code=400,
             detail="Message cannot be empty."
         )
 
+    # --------------------------------------------------------
+    # Jarvis personality
+    # --------------------------------------------------------
+
     system_prompt = """
 You are Jarvis, a personal AI assistant.
 
-Personality:
+Your personality:
 - Intelligent
 - Friendly
 - Calm
@@ -150,49 +149,134 @@ You can help with:
 - General conversation
 - Productivity
 
-Do not claim to have performed actions on the Android device
-unless the Android application actually performed those actions.
+Important:
+Do not claim that you performed an action on the Android device
+unless the Android application actually performed that action.
 
-Do not claim access to the phone's camera, microphone, files,
-contacts, messages, sensors, or applications unless the Android
-application explicitly provides that information.
+Do not pretend to have access to phone sensors, camera,
+microphone, files, contacts, messages, or applications unless
+the Android application explicitly provides that information.
 """
 
-    prompt = f"""
-{system_prompt}
+    # --------------------------------------------------------
+    # OpenRouter request
+    # --------------------------------------------------------
 
-USER:
-{request.message}
-"""
+    payload = {
+        "model": MODEL_NAME,
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": request.message
+            }
+        ]
+    }
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://jarvis-ai-backend-o4d3.onrender.com",
+        "X-Title": "Jarvis AI"
+    }
+
+    # --------------------------------------------------------
+    # Call OpenRouter
+    # --------------------------------------------------------
 
     try:
 
-        response = client.models.generate_content(
-            model=MODEL_NAME,
-            contents=prompt
+        response = requests.post(
+            OPENROUTER_URL,
+            headers=headers,
+            json=payload,
+            timeout=60
         )
 
-        answer = response.text
+        # ----------------------------------------------------
+        # Handle OpenRouter errors
+        # ----------------------------------------------------
+
+        if response.status_code != 200:
+
+            print("========================================")
+            print("OPENROUTER ERROR")
+            print("STATUS:", response.status_code)
+            print("RESPONSE:", response.text)
+            print("========================================")
+
+            try:
+                error_data = response.json()
+            except Exception:
+                error_data = response.text
+
+            raise HTTPException(
+                status_code=500,
+                detail=f"OpenRouter request failed: {error_data}"
+            )
+
+        # ----------------------------------------------------
+        # Parse response
+        # ----------------------------------------------------
+
+        data = response.json()
+
+        answer = (
+            data
+            .get("choices", [{}])[0]
+            .get("message", {})
+            .get("content")
+        )
 
         if not answer:
-            answer = "Sorry, I couldn't generate a response."
+
+            raise HTTPException(
+                status_code=500,
+                detail="OpenRouter returned an empty response."
+            )
 
         return ChatResponse(
             response=answer.strip(),
             model=MODEL_NAME,
-            provider="Google Gemini"
+            provider="OpenRouter"
         )
 
-    except Exception as e:
+    except requests.exceptions.Timeout:
+
+        raise HTTPException(
+            status_code=504,
+            detail="OpenRouter request timed out."
+        )
+
+    except requests.exceptions.RequestException as e:
 
         print("========================================")
-        print("GEMINI REQUEST ERROR")
+        print("NETWORK ERROR")
         print(repr(e))
         print("========================================")
 
         raise HTTPException(
             status_code=500,
-            detail=f"Gemini request failed: {str(e)}"
+            detail=f"OpenRouter network error: {str(e)}"
+        )
+
+    except HTTPException:
+
+        raise
+
+    except Exception as e:
+
+        print("========================================")
+        print("UNEXPECTED ERROR")
+        print(repr(e))
+        print("========================================")
+
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected server error: {str(e)}"
         )
 
 
